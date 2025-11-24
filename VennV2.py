@@ -52,7 +52,7 @@ def load_data(_conn, data_inicio, data_fim):
     FROM vendas v
     inner join clientes c
         on v.cliente = c.cliente
-    WHERE data_emissao BETWEEN %s AND %s
+    WHERE data_emissao::date BETWEEN %s AND %s
     ORDER BY data_emissao desc;
     """
     
