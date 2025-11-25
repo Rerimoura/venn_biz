@@ -48,7 +48,9 @@ def load_data(_conn, data_inicio, data_fim):
         v.quant,
         v.vendedor,
         c.cidade,
-        c.raz_social
+        c.raz_social,
+        c.atividade,
+        c.rede
     FROM vendas v
     inner join clientes c
         on v.cliente = c.cliente
@@ -68,9 +70,13 @@ def load_data(_conn, data_inicio, data_fim):
 def get_produtos(_conn):
     """Retorna lista única de produtos"""
     query = """
-    SELECT DISTINCT mercadoria 
-    FROM vendas
-    ORDER BY mercadoria
+    SELECT 
+    DISTINCT v.mercadoria 
+    FROM vendas v
+    inner join mercadorias m
+        on m.mercadoria  = v.mercadoria
+    WHERE m.custo_inf > 0.01 and m.divisao in (2,3,4,5,6,7,10,11,12,14,15,16)
+    ORDER BY mercadoria;
     """
     try:
         df = pd.read_sql_query(query, _conn)
@@ -102,10 +108,12 @@ def get_cidades(_conn):
 def get_vendedores(_conn):
     """Retorna lista única de vendedores"""
     query = """
-    SELECT DISTINCT vendedor 
-    FROM vendas
-    WHERE vendedor IS NOT NULL
-    ORDER BY vendedor
+    SELECT DISTINCT v.vendedor 
+    FROM vendas v
+    inner join vendedores ve
+        on ve.vendedor  = v.vendedor  
+    WHERE ve.data_desligamento IS NULL
+    ORDER BY v.vendedor 
     """
     try:
         df = pd.read_sql_query(query, _conn)
@@ -113,7 +121,7 @@ def get_vendedores(_conn):
     except Exception as e:
         return []
 
-# Função para análise de venda  cruzada
+# Função para análise de venda cruzada
 def analisar_venda_cruzada(df, produto_a, produto_b):
     """Analisa venda cruzada entre dois produtos"""
     
@@ -345,6 +353,22 @@ def main():
         default=['Todos']
     )
     
+    # Filtro de atividade
+    atividades_disponiveis = ['Todas'] + sorted(df['atividade'].dropna().unique().tolist())
+    atividade_selecionada = st.sidebar.multiselect(
+        "Atividade",
+        options=atividades_disponiveis,
+        default=['Todas']
+    )
+
+    # Filtro de rede
+    redes_disponiveis = ['Todas'] + sorted(df['rede'].dropna().unique().tolist())
+    rede_selecionada = st.sidebar.multiselect(
+        "Rede",
+        options=redes_disponiveis,
+        default=['Todas']
+    )
+    
     # Aplicar filtros
     df_filtrado = df.copy()
     
@@ -353,6 +377,12 @@ def main():
     
     if 'Todos' not in vendedor_selecionado and len(vendedor_selecionado) > 0:
         df_filtrado = df_filtrado[df_filtrado['vendedor'].isin(vendedor_selecionado)]
+        
+    if 'Todas' not in atividade_selecionada and len(atividade_selecionada) > 0:
+        df_filtrado = df_filtrado[df_filtrado['atividade'].isin(atividade_selecionada)]
+
+    if 'Todas' not in rede_selecionada and len(rede_selecionada) > 0:
+        df_filtrado = df_filtrado[df_filtrado['rede'].isin(rede_selecionada)]
     
     # Validação
     if produto_a == produto_b:
@@ -422,11 +452,13 @@ def main():
                 (df_filtrado['mercadoria'] == produto_a)
             ].groupby('cliente').agg({
                 'raz_social': 'first',
+                'atividade': 'first',
+                'rede': 'first',
                 'data_emissao': 'max',
                 'quant': 'sum'
             }).reset_index()
             
-            df_apenas_a.columns = ['Cliente', 'Razão Social', 'Última Compra', 'Qtd Total']
+            df_apenas_a.columns = ['Cliente', 'Razão Social', 'Atividade', 'Rede', 'Última Compra', 'Qtd Total']
             df_apenas_a = df_apenas_a.sort_values('Última Compra', ascending=False)
             
             st.dataframe(df_apenas_a, use_container_width=True)
@@ -452,11 +484,13 @@ def main():
                 (df_filtrado['mercadoria'] == produto_b)
             ].groupby('cliente').agg({
                 'raz_social': 'first',
+                'atividade': 'first',
+                'rede': 'first',
                 'data_emissao': 'max',
                 'quant': 'sum'
             }).reset_index()
             
-            df_apenas_b.columns = ['Cliente', 'Razão Social', 'Última Compra', 'Qtd Total']
+            df_apenas_b.columns = ['Cliente', 'Razão Social', 'Atividade', 'Rede', 'Última Compra', 'Qtd Total']
             df_apenas_b = df_apenas_b.sort_values('Última Compra', ascending=False)
             
             st.dataframe(df_apenas_b, use_container_width=True)
@@ -480,11 +514,13 @@ def main():
                 df_filtrado['cliente'].isin(resultado['ambos'])
             ].groupby('cliente').agg({
                 'raz_social': 'first',
+                'atividade': 'first',
+                'rede': 'first',
                 'data_emissao': 'max',
                 'quant': 'sum'
             }).reset_index()
             
-            df_ambos.columns = ['Cliente', 'Razão Social', 'Última Compra', 'Qtd Total']
+            df_ambos.columns = ['Cliente', 'Razão Social', 'Atividade', 'Rede', 'Última Compra', 'Qtd Total']
             df_ambos = df_ambos.sort_values('Última Compra', ascending=False)
             
             st.dataframe(df_ambos, use_container_width=True)
