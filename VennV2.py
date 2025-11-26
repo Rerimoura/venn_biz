@@ -327,13 +327,13 @@ def main():
     produtos_disponiveis = sorted(df['mercadoria'].unique())
     
     produto_a = st.sidebar.selectbox(
-        "Produto A",
+        "Produto A (código Biz)",
         options=produtos_disponiveis,
         index=0 if len(produtos_disponiveis) > 0 else None
     )
     
     produto_b = st.sidebar.selectbox(
-        "Produto B",
+        "Produto B (código Biz)",
         options=produtos_disponiveis,
         index=1 if len(produtos_disponiveis) > 1 else 0
     )
