@@ -7,6 +7,7 @@ from matplotlib_venn import venn2
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from io import BytesIO
 
 # Configuração da página
 st.set_page_config(
@@ -50,10 +51,13 @@ def load_data(_conn, data_inicio, data_fim):
         c.cidade,
         c.raz_social,
         c.atividade,
-        c.rede
+        c.rede,
+        m.descricao as descricao_produto
     FROM vendas v
     inner join clientes c
         on v.cliente = c.cliente
+    left join mercadorias m
+        on v.mercadoria = m.mercadoria
     WHERE data_emissao::date BETWEEN %s AND %s
     ORDER BY data_emissao desc;
     """
@@ -323,13 +327,13 @@ def main():
     produtos_disponiveis = sorted(df['mercadoria'].unique())
     
     produto_a = st.sidebar.selectbox(
-        "Produto A",
+        "Produto A (código Biz)",
         options=produtos_disponiveis,
         index=0 if len(produtos_disponiveis) > 0 else None
     )
     
     produto_b = st.sidebar.selectbox(
-        "Produto B",
+        "Produto B (código Biz)",
         options=produtos_disponiveis,
         index=1 if len(produtos_disponiveis) > 1 else 0
     )
@@ -452,24 +456,31 @@ def main():
                 (df_filtrado['mercadoria'] == produto_a)
             ].groupby('cliente').agg({
                 'raz_social': 'first',
+                'cidade': 'first',
                 'atividade': 'first',
                 'rede': 'first',
+                'vendedor': 'last',
+                'descricao_produto': 'first',
                 'data_emissao': 'max',
                 'quant': 'sum'
             }).reset_index()
             
-            df_apenas_a.columns = ['Cliente', 'Razão Social', 'Atividade', 'Rede', 'Última Compra', 'Qtd Total']
+            df_apenas_a.columns = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede', 'Último Vendedor', 'Produto', 'Última Compra', 'Qtd Total']
             df_apenas_a = df_apenas_a.sort_values('Última Compra', ascending=False)
             
             st.dataframe(df_apenas_a, use_container_width=True)
             
-            # Botão de download
-            csv = df_apenas_a.to_csv(index=False).encode('utf-8')
+            # Botão de download Excel
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_apenas_a.to_excel(writer, index=False, sheet_name='Apenas Produto A')
+            buffer.seek(0)
+            
             st.download_button(
-                label="⬇️ Download CSV",
-                data=csv,
-                file_name=f'clientes_apenas_A_{datetime.now().strftime("%Y%m%d")}.csv',
-                mime='text/csv'
+                label="📥 Download Excel",
+                data=buffer,
+                file_name=f'clientes_apenas_A_{datetime.now().strftime("%Y%m%d")}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
         else:
             st.info("Nenhum cliente encontrado nesta categoria.")
@@ -484,23 +495,31 @@ def main():
                 (df_filtrado['mercadoria'] == produto_b)
             ].groupby('cliente').agg({
                 'raz_social': 'first',
+                'cidade': 'first',
                 'atividade': 'first',
                 'rede': 'first',
+                'vendedor': 'last',
+                'descricao_produto': 'first',
                 'data_emissao': 'max',
                 'quant': 'sum'
             }).reset_index()
             
-            df_apenas_b.columns = ['Cliente', 'Razão Social', 'Atividade', 'Rede', 'Última Compra', 'Qtd Total']
+            df_apenas_b.columns = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede', 'Último Vendedor', 'Produto', 'Última Compra', 'Qtd Total']
             df_apenas_b = df_apenas_b.sort_values('Última Compra', ascending=False)
             
             st.dataframe(df_apenas_b, use_container_width=True)
             
-            csv = df_apenas_b.to_csv(index=False).encode('utf-8')
+            # Botão de download Excel
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_apenas_b.to_excel(writer, index=False, sheet_name='Apenas Produto B')
+            buffer.seek(0)
+            
             st.download_button(
-                label="⬇️ Download CSV",
-                data=csv,
-                file_name=f'clientes_apenas_B_{datetime.now().strftime("%Y%m%d")}.csv',
-                mime='text/csv'
+                label="📥 Download Excel",
+                data=buffer,
+                file_name=f'clientes_apenas_B_{datetime.now().strftime("%Y%m%d")}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
         else:
             st.info("Nenhum cliente encontrado nesta categoria.")
@@ -510,27 +529,55 @@ def main():
         # Tabela: Compraram Ambos
         st.markdown("### 🟣 Clientes que compraram AMBOS os produtos")
         if len(resultado['ambos']) > 0:
+            # Get data for both products
+            df_prod_a = df_filtrado[
+                df_filtrado['cliente'].isin(resultado['ambos']) &
+                (df_filtrado['mercadoria'] == produto_a)
+            ].groupby('cliente').agg({
+                'descricao_produto': 'first'
+            }).reset_index().rename(columns={'descricao_produto': 'desc_a'})
+            
+            df_prod_b = df_filtrado[
+                df_filtrado['cliente'].isin(resultado['ambos']) &
+                (df_filtrado['mercadoria'] == produto_b)
+            ].groupby('cliente').agg({
+                'descricao_produto': 'first'
+            }).reset_index().rename(columns={'descricao_produto': 'desc_b'})
+            
             df_ambos = df_filtrado[
                 df_filtrado['cliente'].isin(resultado['ambos'])
             ].groupby('cliente').agg({
                 'raz_social': 'first',
+                'cidade': 'first',
                 'atividade': 'first',
                 'rede': 'first',
+                'vendedor': 'last',
                 'data_emissao': 'max',
                 'quant': 'sum'
             }).reset_index()
             
-            df_ambos.columns = ['Cliente', 'Razão Social', 'Atividade', 'Rede', 'Última Compra', 'Qtd Total']
+            # Merge product descriptions
+            df_ambos = df_ambos.merge(df_prod_a, on='cliente', how='left')
+            df_ambos = df_ambos.merge(df_prod_b, on='cliente', how='left')
+            df_ambos['produtos'] = df_ambos['desc_a'] + ' | ' + df_ambos['desc_b']
+            df_ambos = df_ambos.drop(['desc_a', 'desc_b'], axis=1)
+            
+            df_ambos.columns = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede', 'Último Vendedor', 'Última Compra', 'Qtd Total', 'Produtos']
             df_ambos = df_ambos.sort_values('Última Compra', ascending=False)
             
             st.dataframe(df_ambos, use_container_width=True)
             
-            csv = df_ambos.to_csv(index=False).encode('utf-8')
+            # Botão de download Excel
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_ambos.to_excel(writer, index=False, sheet_name='Ambos Produtos')
+            buffer.seek(0)
+            
             st.download_button(
-                label="⬇️ Download CSV",
-                data=csv,
-                file_name=f'clientes_ambos_{datetime.now().strftime("%Y%m%d")}.csv',
-                mime='text/csv'
+                label="📥 Download Excel",
+                data=buffer,
+                file_name=f'clientes_ambos_{datetime.now().strftime("%Y%m%d")}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
         else:
             st.info("Nenhum cliente encontrado nesta categoria.")
