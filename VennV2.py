@@ -477,7 +477,7 @@ def main():
             buffer.seek(0)
             
             st.download_button(
-                label="📥 Download Listagem Excel",
+                label="📥 Download Excel",
                 data=buffer,
                 file_name=f'clientes_apenas_A_{datetime.now().strftime("%Y%m%d")}.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -516,7 +516,7 @@ def main():
             buffer.seek(0)
             
             st.download_button(
-                label="📥 Download Listagem Excel",
+                label="📥 Download Excel",
                 data=buffer,
                 file_name=f'clientes_apenas_B_{datetime.now().strftime("%Y%m%d")}.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -574,7 +574,7 @@ def main():
             buffer.seek(0)
             
             st.download_button(
-                label="📥 Download Listagem Excel",
+                label="📥 Download Excel",
                 data=buffer,
                 file_name=f'clientes_ambos_{datetime.now().strftime("%Y%m%d")}.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
