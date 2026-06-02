@@ -1,591 +1,312 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-from psycopg2 import sql
 import matplotlib.pyplot as plt
 from matplotlib_venn import venn2
-import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from io import BytesIO
 
-# Configuração da página
-st.set_page_config(
-    page_title="Análise de Venda Cruzada",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="Análise de Venda Cruzada", page_icon="📊", layout="wide")
 
-# Função para conectar ao PostgreSQL
+# ── Banco de dados ────────────────────────────────────────────────────────────
+
 @st.cache_resource
 def get_connection():
-    """Estabelece conexão com PostgreSQL"""
     try:
-        # Usando st.secrets para credenciais
-        db_config = st.secrets["postgres"]
-        
-        conn = psycopg2.connect(
-            host=db_config["host"],
-            database=db_config["database"],
-            user=db_config["user"],
-            password=db_config["password"],
-            port=db_config["port"]
+        cfg = st.secrets["postgres"]
+        return psycopg2.connect(
+            host=cfg["host"], database=cfg["database"],
+            user=cfg["user"], password=cfg["password"], port=cfg["port"]
         )
-        return conn
     except Exception as e:
         st.error(f"Erro ao conectar ao banco de dados: {e}")
         return None
 
-# Função para carregar dados
-@st.cache_data(ttl=600)  # Cache por 10 minutos
+
+@st.cache_data(ttl=600)
 def load_data(_conn, data_inicio, data_fim):
-    """Carrega dados de vendas do PostgreSQL"""
     query = """
-    SELECT 
-        v.cliente,
-        v.mercadoria,
-        v.data_emissao,
-        v.valor_liq,
-        v.quant,
-        v.vendedor,
-        c.cidade,
-        c.raz_social,
-        c.atividade,
-        c.rede,
-        m.descricao as descricao_produto
-    FROM vendas v
-    inner join clientes c
-        on v.cliente = c.cliente
-    left join mercadorias m
-        on v.mercadoria = m.mercadoria
-    WHERE data_emissao::date BETWEEN %s AND %s
-    ORDER BY data_emissao desc;
+        SELECT v.cliente, v.mercadoria, v.data_emissao, v.valor_liq, v.quant,
+               v.vendedor, c.cidade, c.raz_social, c.atividade, c.rede,
+               m.descricao AS descricao_produto
+        FROM vendas v
+        JOIN clientes c ON v.cliente = c.cliente
+        LEFT JOIN mercadorias m ON v.mercadoria = m.mercadoria
+        WHERE v.data_emissao::date BETWEEN %s AND %s
+          AND v.vendedor != 2
+        ORDER BY v.data_emissao DESC
     """
-    
     try:
-        df = pd.read_sql_query(query, _conn, params=(data_inicio, data_fim))
-        return df
+        return pd.read_sql_query(query, _conn, params=(data_inicio, data_fim))
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
         return pd.DataFrame()
 
-# Função para obter lista de produtos
-@st.cache_data(ttl=600)
-def get_produtos(_conn):
-    """Retorna lista única de produtos"""
-    query = """
-    SELECT 
-    DISTINCT v.mercadoria 
-    FROM vendas v
-    inner join mercadorias m
-        on m.mercadoria  = v.mercadoria
-    WHERE m.custo_inf > 0.01 and m.divisao in (2,3,4,5,6,7,10,11,12,14,15,16)
-    ORDER BY mercadoria;
-    """
-    try:
-        df = pd.read_sql_query(query, _conn)
-        return df['mercadoria'].tolist()
-    except Exception as e:
-        st.error(f"Erro ao carregar produtos: {e}")
-        return []
+# ── Análise ───────────────────────────────────────────────────────────────────
 
-# Função para obter lista de cidades
-@st.cache_data(ttl=600)
-def get_cidades(_conn):
-    """Retorna lista única de cidades"""
-    query = """
-    SELECT DISTINCT c.cidade 
-    FROM vendas v
-    inner join clientes c
-        on v.cliente = c.cliente 
-    WHERE cidade IS NOT null and UF = 'MG'
-    ORDER BY cidade
-    """
-    try:
-        df = pd.read_sql_query(query, _conn)
-        return df['cidade'].tolist()
-    except Exception as e:
-        return []
-
-# Função para obter lista de vendedores
-@st.cache_data(ttl=600)
-def get_vendedores(_conn):
-    """Retorna lista única de vendedores"""
-    query = """
-    SELECT DISTINCT v.vendedor 
-    FROM vendas v
-    inner join vendedores ve
-        on ve.vendedor  = v.vendedor  
-    WHERE ve.data_desligamento IS NULL
-    ORDER BY v.vendedor 
-    """
-    try:
-        df = pd.read_sql_query(query, _conn)
-        return df['vendedor'].tolist()
-    except Exception as e:
-        return []
-
-# Função para análise de venda cruzada
 def analisar_venda_cruzada(df, produto_a, produto_b):
-    """Analisa venda cruzada entre dois produtos"""
-    
-    # Clientes que compraram produto A
     clientes_a = set(df[df['mercadoria'] == produto_a]['cliente'].unique())
-    
-    # Clientes que compraram produto B
     clientes_b = set(df[df['mercadoria'] == produto_b]['cliente'].unique())
-    
-    # Clientes exclusivos de A
-    apenas_a = clientes_a - clientes_b
-    
-    # Clientes exclusivos de B
-    apenas_b = clientes_b - clientes_a
-    
-    # Clientes que compraram ambos
-    ambos = clientes_a & clientes_b
-    
+    ambos      = clientes_a & clientes_b
     return {
-        'clientes_a': clientes_a,
-        'clientes_b': clientes_b,
-        'apenas_a': apenas_a,
-        'apenas_b': apenas_b,
-        'ambos': ambos,
-        'total_a': len(clientes_a),
-        'total_b': len(clientes_b),
-        'count_apenas_a': len(apenas_a),
-        'count_apenas_b': len(apenas_b),
-        'count_ambos': len(ambos)
+        'clientes_a':    clientes_a,
+        'clientes_b':    clientes_b,
+        'apenas_a':      clientes_a - clientes_b,
+        'apenas_b':      clientes_b - clientes_a,
+        'ambos':         ambos,
+        'total_a':       len(clientes_a),
+        'total_b':       len(clientes_b),
+        'count_apenas_a': len(clientes_a - clientes_b),
+        'count_apenas_b': len(clientes_b - clientes_a),
+        'count_ambos':    len(ambos),
     }
 
-# Função para criar diagrama de Venn
+# ── Gráficos ──────────────────────────────────────────────────────────────────
+
 def criar_diagrama_venn(resultado, produto_a, produto_b):
-    """Cria diagrama de Venn com matplotlib"""
-    
     fig, ax = plt.subplots(figsize=(12, 8))
-    
-    # Criar diagrama
+
     venn = venn2(
-        subsets=(
-            resultado['count_apenas_a'],
-            resultado['count_apenas_b'],
-            resultado['count_ambos']
-        ),
+        subsets=(resultado['count_apenas_a'], resultado['count_apenas_b'], resultado['count_ambos']),
         set_labels=(produto_a, produto_b),
         ax=ax
     )
-    
-    # Personalizar cores
-    if venn.get_patch_by_id('10'):
-        venn.get_patch_by_id('10').set_color('#4285F4')
-        venn.get_patch_by_id('10').set_alpha(0.6)
-        venn.get_patch_by_id('10').set_edgecolor('white')
-        venn.get_patch_by_id('10').set_linewidth(3)
-    
-    if venn.get_patch_by_id('01'):
-        venn.get_patch_by_id('01').set_color('#EA4335')
-        venn.get_patch_by_id('01').set_alpha(0.6)
-        venn.get_patch_by_id('01').set_edgecolor('white')
-        venn.get_patch_by_id('01').set_linewidth(3)
-    
-    if venn.get_patch_by_id('11'):
-        venn.get_patch_by_id('11').set_color('#9C27B0')
-        venn.get_patch_by_id('11').set_alpha(0.7)
-        venn.get_patch_by_id('11').set_edgecolor('white')
-        venn.get_patch_by_id('11').set_linewidth(3)
-    
-    # Customizar textos
+
+    estilos = {'10': '#4285F4', '01': '#EA4335', '11': '#9C27B0'}
+    for pid, cor in estilos.items():
+        patch = venn.get_patch_by_id(pid)
+        if patch:
+            patch.set_facecolor(cor)
+            patch.set_alpha(0.65)
+            patch.set_edgecolor('white')
+            patch.set_linewidth(3)
+
     for text in venn.set_labels:
         text.set_fontsize(14)
         text.set_fontweight('bold')
-        text.set_color('#333')
-    
+
     for text in venn.subset_labels:
         if text:
             text.set_fontsize(16)
             text.set_fontweight('bold')
             text.set_color('white')
-    
-    # Título
-    plt.title('Análise de Venda Cruzada', fontsize=18, fontweight='bold', pad=20)
-    
-    # Calcular taxa de conversão
-    taxa_conversao = (resultado['count_ambos'] / resultado['total_a'] * 100) if resultado['total_a'] > 0 else 0
-    
-    # Box com estatísticas
-    total_geral = resultado['count_apenas_a'] + resultado['count_apenas_b'] + resultado['count_ambos']
-    
-    stats_text = f'''Estatísticas:
-──────────────────────
-Total Clientes: {total_geral}
-Total Produto A: {resultado['total_a']}
-Total Produto B: {resultado['total_b']}
-Apenas A: {resultado['count_apenas_a']}
-Apenas B: {resultado['count_apenas_b']}
-Ambos: {resultado['count_ambos']}
-Taxa Conversão: {taxa_conversao:.1f}%
-──────────────────────'''
-    
-    plt.text(0.02, 0.98, stats_text, 
-             transform=ax.transAxes,
-             fontsize=11,
-             verticalalignment='top',
-             fontfamily='monospace',
-             bbox=dict(boxstyle='round', 
-                       facecolor='#f5f5f5', 
-                       alpha=0.95,
-                       edgecolor='#333',
-                       linewidth=2))
-    
+
+    taxa = (resultado['count_ambos'] / resultado['total_a'] * 100) if resultado['total_a'] else 0
+    total = resultado['count_apenas_a'] + resultado['count_apenas_b'] + resultado['count_ambos']
+
+    stats = (
+        f"Estatísticas:\n{'─'*22}\n"
+        f"Total Clientes : {total}\n"
+        f"Total Produto A: {resultado['total_a']}\n"
+        f"Total Produto B: {resultado['total_b']}\n"
+        f"Apenas A       : {resultado['count_apenas_a']}\n"
+        f"Apenas B       : {resultado['count_apenas_b']}\n"
+        f"Ambos          : {resultado['count_ambos']}\n"
+        f"Taxa Conversão : {taxa:.1f}%\n{'─'*22}"
+    )
+
+    ax.text(0.02, 0.98, stats, transform=ax.transAxes, fontsize=11,
+            verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='#f5f5f5', alpha=0.95,
+                      edgecolor='#333', linewidth=2))
+
+    ax.set_title('Análise de Venda Cruzada', fontsize=18, fontweight='bold', pad=20)
     plt.tight_layout()
     return fig
 
-# Função para criar gráfico de barras
+
 def criar_grafico_barras(resultado):
-    """Cria gráfico de barras com Plotly"""
-    
-    categorias = ['Apenas Produto A', 'Ambos', 'Apenas Produto B']
-    valores = [
-        resultado['count_apenas_a'],
-        resultado['count_ambos'],
-        resultado['count_apenas_b']
-    ]
-    cores = ['#4285F4', '#9C27B0', '#EA4335']
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            x=categorias,
-            y=valores,
-            marker_color=cores,
-            text=valores,
-            textposition='auto',
-            textfont=dict(size=14, color='white')
-        )
-    ])
-    
+    fig = go.Figure(go.Bar(
+        x=['Apenas Produto A', 'Ambos', 'Apenas Produto B'],
+        y=[resultado['count_apenas_a'], resultado['count_ambos'], resultado['count_apenas_b']],
+        marker_color=['#4285F4', '#9C27B0', '#EA4335'],
+        text=[resultado['count_apenas_a'], resultado['count_ambos'], resultado['count_apenas_b']],
+        textposition='auto',
+        textfont=dict(size=14, color='white')
+    ))
     fig.update_layout(
         title='Distribuição de Clientes',
-        xaxis_title='Categoria',
-        yaxis_title='Quantidade de Clientes',
-        height=400,
-        showlegend=False
+        xaxis_title='Categoria', yaxis_title='Quantidade de Clientes',
+        height=400, showlegend=False
     )
-    
     return fig
 
-# Interface principal
+# ── Tabelas detalhadas ────────────────────────────────────────────────────────
+
+AGG_COLS = {
+    'raz_social': 'first', 'cidade': 'first', 'atividade': 'first',
+    'rede': 'first', 'vendedor': 'last', 'descricao_produto': 'first',
+    'data_emissao': 'max', 'quant': 'sum'
+}
+RENAME_BASE = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede',
+               'Último Vendedor', 'Produto', 'Última Compra', 'Qtd Total']
+
+
+def tabela_clientes(df, clientes, mercadoria):
+    return (
+        df[df['cliente'].isin(clientes) & (df['mercadoria'] == mercadoria)]
+        .groupby('cliente')
+        .agg(AGG_COLS)
+        .reset_index()
+        .rename(columns=dict(zip(
+            ['cliente'] + list(AGG_COLS.keys()), RENAME_BASE
+        )))
+        .sort_values('Última Compra', ascending=False)
+    )
+
+
+def tabela_ambos(df, clientes, produto_a, produto_b):
+    desc = lambda p: (
+        df[df['cliente'].isin(clientes) & (df['mercadoria'] == p)]
+        .groupby('cliente')['descricao_produto'].first()
+    )
+    agg_cols_sem_desc = {k: v for k, v in AGG_COLS.items() if k != 'descricao_produto'}
+
+    base = (
+        df[df['cliente'].isin(clientes)]
+        .groupby('cliente')
+        .agg(agg_cols_sem_desc)
+        .reset_index()
+    )
+    base['produtos'] = desc(produto_a).reindex(base['cliente'].values).values \
+                     + ' | ' \
+                     + desc(produto_b).reindex(base['cliente'].values).values
+
+    rename = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede',
+              'Último Vendedor', 'Última Compra', 'Qtd Total', 'Produtos']
+    base.columns = rename
+    return base.sort_values('Última Compra', ascending=False)
+
+
+def excel_download(df, sheet_name, filename):
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as w:
+        df.to_excel(w, index=False, sheet_name=sheet_name)
+    buf.seek(0)
+    st.download_button("📥 Download Excel", data=buf, file_name=filename,
+                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+# ── App principal ─────────────────────────────────────────────────────────────
+
 def main():
     st.title("📊 Análise de Venda Cruzada")
     st.markdown("---")
-    
-    # Conectar ao banco
+
     conn = get_connection()
-    
     if conn is None:
-        st.error("⚠️ Não foi possível conectar ao banco de dados. Verifique as configurações.")
-        st.info("💡 Edite as credenciais do banco na função `get_connection()` no código.")
+        st.error("⚠️ Não foi possível conectar ao banco de dados.")
         return
-    
-    # Sidebar - Filtros
+
+    # Sidebar — filtros de período
     st.sidebar.header("🔍 Filtros")
-    
-    # Filtro de data
     st.sidebar.subheader("📅 Período")
-    
+
+    hoje = datetime.now().date()
     col1, col2 = st.sidebar.columns(2)
-    
-    # Data padrão: últimos 90 dias
-    data_fim_default = datetime.now().date()
-    data_inicio_default = data_fim_default - timedelta(days=90)
-    
-    with col1:
-        data_inicio = st.date_input(
-            "Data Início",
-            value=data_inicio_default,
-            max_value=data_fim_default
-        )
-    
-    with col2:
-        data_fim = st.date_input(
-            "Data Fim",
-            value=data_fim_default,
-            min_value=data_inicio
-        )
-    
-    # Carregar dados
+    data_inicio = col1.date_input("Início", value=hoje - timedelta(days=90), max_value=hoje)
+    data_fim    = col2.date_input("Fim",    value=hoje, min_value=data_inicio)
+
     with st.spinner("Carregando dados..."):
         df = load_data(conn, data_inicio, data_fim)
-    
+
     if df.empty:
         st.warning("⚠️ Nenhum dado encontrado para o período selecionado.")
         return
-    
-    st.sidebar.success(f"✅ {len(df)} registros carregados")
-    
-    # Filtro de produtos
+
+    st.sidebar.success(f"✅ {len(df):,} registros carregados")
+
+    # Sidebar — seleção de produtos
     st.sidebar.subheader("🛍️ Produtos")
-    
-    produtos_disponiveis = sorted(df['mercadoria'].unique())
-    
-    produto_a = st.sidebar.selectbox(
-        "Produto A (código Biz)",
-        options=produtos_disponiveis,
-        index=0 if len(produtos_disponiveis) > 0 else None
-    )
-    
-    produto_b = st.sidebar.selectbox(
-        "Produto B (código Biz)",
-        options=produtos_disponiveis,
-        index=1 if len(produtos_disponiveis) > 1 else 0
-    )
-    
-    # Filtros adicionais
+    produtos = sorted(df['mercadoria'].unique())
+    produto_a = st.sidebar.selectbox("Produto A", produtos, index=0)
+    produto_b = st.sidebar.selectbox("Produto B", produtos, index=min(1, len(produtos) - 1))
+
+    # Sidebar — filtros adicionais
     st.sidebar.subheader("🎯 Filtros Adicionais")
-    
-    # Filtro de cidade
-    cidades_disponiveis = ['Todas'] + sorted(df['cidade'].dropna().unique().tolist())
-    cidade_selecionada = st.sidebar.multiselect(
-        "Cidade",
-        options=cidades_disponiveis,
-        default=['Todas']
-    )
-    
-    # Filtro de vendedor
-    vendedores_disponiveis = ['Todos'] + sorted(df['vendedor'].dropna().unique().tolist())
-    vendedor_selecionado = st.sidebar.multiselect(
-        "Vendedor",
-        options=vendedores_disponiveis,
-        default=['Todos']
-    )
-    
-    # Filtro de atividade
-    atividades_disponiveis = ['Todas'] + sorted(df['atividade'].dropna().unique().tolist())
-    atividade_selecionada = st.sidebar.multiselect(
-        "Atividade",
-        options=atividades_disponiveis,
-        default=['Todas']
-    )
 
-    # Filtro de rede
-    redes_disponiveis = ['Todas'] + sorted(df['rede'].dropna().unique().tolist())
-    rede_selecionada = st.sidebar.multiselect(
-        "Rede",
-        options=redes_disponiveis,
-        default=['Todas']
-    )
-    
+    def multiselect_filtro(label, coluna, placeholder='Todas'):
+        opcoes = [placeholder] + sorted(df[coluna].dropna().unique().tolist())
+        return st.sidebar.multiselect(label, opcoes, default=[placeholder])
+
+    cidade_sel    = multiselect_filtro("Cidade",    'cidade',    'Todas')
+    vendedor_sel  = multiselect_filtro("Vendedor",  'vendedor',  'Todos')
+    atividade_sel = multiselect_filtro("Atividade", 'atividade', 'Todas')
+    rede_sel      = multiselect_filtro("Rede",      'rede',      'Todas')
+
     # Aplicar filtros
-    df_filtrado = df.copy()
-    
-    if 'Todas' not in cidade_selecionada and len(cidade_selecionada) > 0:
-        df_filtrado = df_filtrado[df_filtrado['cidade'].isin(cidade_selecionada)]
-    
-    if 'Todos' not in vendedor_selecionado and len(vendedor_selecionado) > 0:
-        df_filtrado = df_filtrado[df_filtrado['vendedor'].isin(vendedor_selecionado)]
-        
-    if 'Todas' not in atividade_selecionada and len(atividade_selecionada) > 0:
-        df_filtrado = df_filtrado[df_filtrado['atividade'].isin(atividade_selecionada)]
+    df_f = df.copy()
+    filtros = [
+        (cidade_sel,    'cidade',    'Todas'),
+        (vendedor_sel,  'vendedor',  'Todos'),
+        (atividade_sel, 'atividade', 'Todas'),
+        (rede_sel,      'rede',      'Todas'),
+    ]
+    for sel, col, placeholder in filtros:
+        if placeholder not in sel and sel:
+            df_f = df_f[df_f[col].isin(sel)]
 
-    if 'Todas' not in rede_selecionada and len(rede_selecionada) > 0:
-        df_filtrado = df_filtrado[df_filtrado['rede'].isin(rede_selecionada)]
-    
-    # Validação
     if produto_a == produto_b:
-        st.warning("⚠️ Por favor, selecione produtos diferentes para Produto A e Produto B.")
+        st.warning("⚠️ Selecione produtos diferentes para Produto A e Produto B.")
         return
-    
-    # Análise
-    resultado = analisar_venda_cruzada(df_filtrado, produto_a, produto_b)
-    
-    # Métricas principais
+
+    resultado = analisar_venda_cruzada(df_f, produto_a, produto_b)
+
+    # Métricas
     st.subheader("📈 Resumo")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            label=f"🔵 Total {str(produto_a)[:30]}...",
-            value=resultado['total_a'],
-            delta=None
-        )
-    
-    with col2:
-        st.metric(
-            label=f"🔴 Total {str(produto_b)[:30]}...",
-            value=resultado['total_b'],
-            delta=None
-        )
-    
-    with col3:
-        st.metric(
-            label="🟣 Compraram Ambos",
-            value=resultado['count_ambos'],
-            delta=None
-        )
-    
-    with col4:
-        taxa_conversao = (resultado['count_ambos'] / resultado['total_a'] * 100) if resultado['total_a'] > 0 else 0
-        st.metric(
-            label="📊 Taxa de Conversão",
-            value=f"{taxa_conversao:.1f}%",
-            delta=None
-        )
-    
+    taxa = (resultado['count_ambos'] / resultado['total_a'] * 100) if resultado['total_a'] else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(f"🔵 {str(produto_a)[:30]}", resultado['total_a'])
+    c2.metric(f"🔴 {str(produto_b)[:30]}", resultado['total_b'])
+    c3.metric("🟣 Compraram Ambos",        resultado['count_ambos'])
+    c4.metric("📊 Taxa de Conversão",      f"{taxa:.1f}%")
+
     st.markdown("---")
-    
-    # Visualizações
+
+    # Tabs
     tab1, tab2, tab3 = st.tabs(["📊 Diagrama de Venn", "📈 Gráfico de Barras", "📋 Tabelas Detalhadas"])
-    
+
     with tab1:
         st.subheader("Diagrama de Venn")
-        fig_venn = criar_diagrama_venn(resultado, produto_a, produto_b)
-        st.pyplot(fig_venn)
-    
+        st.pyplot(criar_diagrama_venn(resultado, produto_a, produto_b))
+
     with tab2:
         st.subheader("Gráfico de Barras")
-        fig_barras = criar_grafico_barras(resultado)
-        st.plotly_chart(fig_barras, use_container_width=True)
-    
+        st.plotly_chart(criar_grafico_barras(resultado), use_container_width=True)
+
     with tab3:
-        st.subheader("Detalhamento de Clientes")
-        
-        # Tabela: Compraram A e não B
-        st.markdown("### 🔵 Clientes que compraram apenas Produto A")
-        if len(resultado['apenas_a']) > 0:
-            df_apenas_a = df_filtrado[
-                df_filtrado['cliente'].isin(resultado['apenas_a']) &
-                (df_filtrado['mercadoria'] == produto_a)
-            ].groupby('cliente').agg({
-                'raz_social': 'first',
-                'cidade': 'first',
-                'atividade': 'first',
-                'rede': 'first',
-                'vendedor': 'last',
-                'descricao_produto': 'first',
-                'data_emissao': 'max',
-                'quant': 'sum'
-            }).reset_index()
-            
-            df_apenas_a.columns = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede', 'Último Vendedor', 'Produto', 'Última Compra', 'Qtd Total']
-            df_apenas_a = df_apenas_a.sort_values('Última Compra', ascending=False)
-            
-            st.dataframe(df_apenas_a, use_container_width=True)
-            
-            # Botão de download Excel
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_apenas_a.to_excel(writer, index=False, sheet_name='Apenas Produto A')
-            buffer.seek(0)
-            
-            st.download_button(
-                label="📥 Download Excel",
-                data=buffer,
-                file_name=f'clientes_apenas_A_{datetime.now().strftime("%Y%m%d")}.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-        else:
-            st.info("Nenhum cliente encontrado nesta categoria.")
-        
-        st.markdown("---")
-        
-        # Tabela: Compraram B e não A
-        st.markdown("### 🔴 Clientes que compraram apenas Produto B")
-        if len(resultado['apenas_b']) > 0:
-            df_apenas_b = df_filtrado[
-                df_filtrado['cliente'].isin(resultado['apenas_b']) &
-                (df_filtrado['mercadoria'] == produto_b)
-            ].groupby('cliente').agg({
-                'raz_social': 'first',
-                'cidade': 'first',
-                'atividade': 'first',
-                'rede': 'first',
-                'vendedor': 'last',
-                'descricao_produto': 'first',
-                'data_emissao': 'max',
-                'quant': 'sum'
-            }).reset_index()
-            
-            df_apenas_b.columns = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede', 'Último Vendedor', 'Produto', 'Última Compra', 'Qtd Total']
-            df_apenas_b = df_apenas_b.sort_values('Última Compra', ascending=False)
-            
-            st.dataframe(df_apenas_b, use_container_width=True)
-            
-            # Botão de download Excel
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_apenas_b.to_excel(writer, index=False, sheet_name='Apenas Produto B')
-            buffer.seek(0)
-            
-            st.download_button(
-                label="📥 Download Excel",
-                data=buffer,
-                file_name=f'clientes_apenas_B_{datetime.now().strftime("%Y%m%d")}.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-        else:
-            st.info("Nenhum cliente encontrado nesta categoria.")
-        
-        st.markdown("---")
-        
-        # Tabela: Compraram Ambos
+        data_str = datetime.now().strftime("%Y%m%d")
+
+        secoes = [
+            ("🔵 Clientes que compraram apenas Produto A", resultado['apenas_a'], produto_a,
+             lambda c, p: tabela_clientes(df_f, c, p), f"clientes_apenas_A_{data_str}.xlsx", "Apenas Produto A"),
+            ("🔴 Clientes que compraram apenas Produto B", resultado['apenas_b'], produto_b,
+             lambda c, p: tabela_clientes(df_f, c, p), f"clientes_apenas_B_{data_str}.xlsx", "Apenas Produto B"),
+        ]
+
+        for titulo, clientes, prod, fn_tabela, filename, sheet in secoes:
+            st.markdown(f"### {titulo}")
+            if clientes:
+                tbl = fn_tabela(clientes, prod)
+                st.dataframe(tbl, use_container_width=True)
+                excel_download(tbl, sheet, filename)
+            else:
+                st.info("Nenhum cliente encontrado nesta categoria.")
+            st.markdown("---")
+
         st.markdown("### 🟣 Clientes que compraram AMBOS os produtos")
-        if len(resultado['ambos']) > 0:
-            # Get data for both products
-            df_prod_a = df_filtrado[
-                df_filtrado['cliente'].isin(resultado['ambos']) &
-                (df_filtrado['mercadoria'] == produto_a)
-            ].groupby('cliente').agg({
-                'descricao_produto': 'first'
-            }).reset_index().rename(columns={'descricao_produto': 'desc_a'})
-            
-            df_prod_b = df_filtrado[
-                df_filtrado['cliente'].isin(resultado['ambos']) &
-                (df_filtrado['mercadoria'] == produto_b)
-            ].groupby('cliente').agg({
-                'descricao_produto': 'first'
-            }).reset_index().rename(columns={'descricao_produto': 'desc_b'})
-            
-            df_ambos = df_filtrado[
-                df_filtrado['cliente'].isin(resultado['ambos'])
-            ].groupby('cliente').agg({
-                'raz_social': 'first',
-                'cidade': 'first',
-                'atividade': 'first',
-                'rede': 'first',
-                'vendedor': 'last',
-                'data_emissao': 'max',
-                'quant': 'sum'
-            }).reset_index()
-            
-            # Merge product descriptions
-            df_ambos = df_ambos.merge(df_prod_a, on='cliente', how='left')
-            df_ambos = df_ambos.merge(df_prod_b, on='cliente', how='left')
-            df_ambos['produtos'] = df_ambos['desc_a'] + ' | ' + df_ambos['desc_b']
-            df_ambos = df_ambos.drop(['desc_a', 'desc_b'], axis=1)
-            
-            df_ambos.columns = ['Cliente', 'Razão Social', 'Cidade', 'Atividade', 'Rede', 'Último Vendedor', 'Última Compra', 'Qtd Total', 'Produtos']
-            df_ambos = df_ambos.sort_values('Última Compra', ascending=False)
-            
-            st.dataframe(df_ambos, use_container_width=True)
-            
-            # Botão de download Excel
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_ambos.to_excel(writer, index=False, sheet_name='Ambos Produtos')
-            buffer.seek(0)
-            
-            st.download_button(
-                label="📥 Download Excel",
-                data=buffer,
-                file_name=f'clientes_ambos_{datetime.now().strftime("%Y%m%d")}.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
+        if resultado['ambos']:
+            tbl = tabela_ambos(df_f, resultado['ambos'], produto_a, produto_b)
+            st.dataframe(tbl, use_container_width=True)
+            excel_download(tbl, "Ambos Produtos", f"clientes_ambos_{data_str}.xlsx")
         else:
             st.info("Nenhum cliente encontrado nesta categoria.")
-    
-    # Rodapé
+
     st.markdown("---")
-    st.caption(f"📅 Período analisado: {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
-    st.caption(f"📊 Total de registros: {len(df_filtrado):,}")
+    st.caption(f"📅 Período: {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+    st.caption(f"📊 Total de registros: {len(df_f):,}")
+
 
 if __name__ == "__main__":
     main()
